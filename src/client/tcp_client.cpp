@@ -22,7 +22,10 @@ void TcpClient::run() {
     // 3. Blast data for the configured duration
     Timer duration_timer;
     duration_timer.start(config_.duration);
+    throughput_.set_interval(config_.interval);
     throughput_.start();
+
+    Throughput::print_header();
 
     while (!duration_timer.is_expired()) {
         ssize_t bytes_written = socket_.write(buffer.data(), buffer.size());
@@ -31,6 +34,11 @@ void TcpClient::run() {
             break;
         }
         throughput_.add_bytes(bytes_written);
+
+        std::string line;
+        if (throughput_.check_interval(line)) {
+            std::cout << line << std::endl;
+        }
     }
 
     // 4. Close connection (signals server that test is done)
@@ -40,6 +48,5 @@ void TcpClient::run() {
 
     // 5. Report
     throughput_.stop();
-    std::cout << std::endl;
     throughput_.report();
 }

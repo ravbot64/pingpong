@@ -15,6 +15,7 @@ struct Config {
     int port = 5201;
     int duration = 10;        // seconds (client only)
     int buffer_size = 131072; // 128 KB default (same as iperf)
+    double interval = 1.0;    // reporting interval in seconds
 };
 
 Config parse_args(int argc, char* argv[]);

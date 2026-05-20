@@ -7,7 +7,7 @@
 static void print_usage(const char* program_name) {
     std::cerr << "Usage:" << std::endl;
     std::cerr << "  Server: " << program_name << " -s [-p port]" << std::endl;
-    std::cerr << "  Client: " << program_name << " -c <host> [-p port] [-t duration] [-l buffer_size]" << std::endl;
+    std::cerr << "  Client: " << program_name << " -c <host> [-p port] [-t duration] [-l buffer_size] [-i interval]" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  -s            Run as server" << std::endl;
@@ -15,6 +15,7 @@ static void print_usage(const char* program_name) {
     std::cerr << "  -p <port>     Port to listen on / connect to (default: 5201)" << std::endl;
     std::cerr << "  -t <seconds>  Test duration in seconds (default: 10)" << std::endl;
     std::cerr << "  -l <bytes>    Buffer size in bytes (default: 131072)" << std::endl;
+    std::cerr << "  -i <seconds>  Reporting interval in seconds (default: 1)" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Examples:" << std::endl;
     std::cerr << "  " << program_name << " -s                        # start server on default port 5201" << std::endl;
@@ -30,7 +31,7 @@ Config parse_args(int argc, char* argv[]) {
     bool has_mode = false;
     int opt;
 
-    while ((opt = getopt(argc, argv, "sc:p:t:l:")) != -1) {
+    while ((opt = getopt(argc, argv, "sc:p:t:l:i:")) != -1) {
         switch (opt) {
             case 's':
                 config.mode = Mode::SERVER;
@@ -49,6 +50,9 @@ Config parse_args(int argc, char* argv[]) {
                 break;
             case 'l':
                 config.buffer_size = std::atoi(optarg);
+                break;
+            case 'i':
+                config.interval = std::atof(optarg);
                 break;
             default:
                 print_usage(argv[0]);
@@ -83,6 +87,11 @@ Config parse_args(int argc, char* argv[]) {
 
     if (config.buffer_size <= 0) {
         std::cerr << "Error: buffer size must be > 0" << std::endl;
+        exit(1);
+    }
+
+    if (config.interval <= 0.0) {
+        std::cerr << "Error: interval must be > 0" << std::endl;
         exit(1);
     }
 
