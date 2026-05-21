@@ -5,48 +5,63 @@
 #include <cstdio>
 
 void Throughput::set_interval(double seconds) {
-    interval_sec_ = seconds;
+    if (seconds > 0.0) {
+        interval_sec_ = seconds;
+    }
 }
 
 void Throughput::start() {
     total_bytes_ = 0;
     elapsed_ = 0.0;
     interval_bytes_ = 0;
-    interval_start_ = 0.0;
-
+    interval_start_sec_ = 0.0;
+    next_boundary_sec_ = interval_sec_;
+    first_byte_seen_ = false;
+    started_ = true;
     timer_.start();
-    interval_timer_.start();
 }
 
-void Throughput::add_bytes(size_t count) {
+void Throughput::mark_first_byte() {
+    if (!started_ || first_byte_seen_) return;
+    first_byte_seen_ = true;
+    // Re-anchor t = 0 to "now" so idle time before the first byte doesn't
+    // count toward elapsed_seconds().
+    timer_.reset();
+}
+
+void Throughput::add_bytes(uint64_t count) {
     total_bytes_ += count;
     interval_bytes_ += count;
 }
 
 bool Throughput::check_interval(std::string& line) {
-    double interval_elapsed = interval_timer_.elapsed_seconds();
-    if (interval_elapsed < interval_sec_) {
+    if (!started_) return false;
+
+    double now_sec = timer_.elapsed_seconds();
+    if (now_sec < next_boundary_sec_) {
         return false;
     }
 
-    // Interval has elapsed — compute stats and format line
-    double interval_end = interval_start_ + interval_elapsed;
-    double bps = (interval_elapsed > 0.0)
-        ? (static_cast<double>(interval_bytes_) * 8.0) / interval_elapsed
+    // Emit the bucket that just closed: [interval_start_sec_, next_boundary_sec_].
+    // Bandwidth is computed against the configured interval width, not the
+    // measured wall-clock delta, so each bucket reports a clean rate.
+    double bps = (interval_sec_ > 0.0)
+        ? (static_cast<double>(interval_bytes_) * 8.0) / interval_sec_
         : 0.0;
 
-    line = format_row(interval_start_, interval_end, interval_bytes_, bps);
+    line = format_row(interval_start_sec_, next_boundary_sec_, interval_bytes_, bps);
 
-    // Reset for next interval
-    interval_start_ = interval_end;
     interval_bytes_ = 0;
-    interval_timer_.reset();
+    interval_start_sec_ = next_boundary_sec_;
+    next_boundary_sec_ += interval_sec_;
 
     return true;
 }
 
 void Throughput::stop() {
+    if (!started_) return;
     elapsed_ = timer_.elapsed_seconds();
+    started_ = false;
 }
 
 double Throughput::get_bits_per_second() const {
@@ -76,16 +91,20 @@ std::string Throughput::format_row(double start, double end, uint64_t bytes, dou
 }
 
 void Throughput::report() const {
-    // Flush any remaining partial interval as a final row
-    if (interval_bytes_ > 0 && elapsed_ > interval_start_) {
-        double partial_elapsed = elapsed_ - interval_start_;
-        double bps = (partial_elapsed > 0.0)
-            ? (static_cast<double>(interval_bytes_) * 8.0) / partial_elapsed
-            : 0.0;
-        std::cout << format_row(interval_start_, elapsed_, interval_bytes_, bps) << std::endl;
+    // Emit a trailing partial bucket only if it represents a meaningful slice
+    // of time (>= 1% of one interval). This avoids ugly slivers like
+    // "10.00-10.02 sec" while still surfacing genuine partial buckets.
+    if (interval_bytes_ > 0 && elapsed_ > interval_start_sec_) {
+        double partial_elapsed = elapsed_ - interval_start_sec_;
+        if (partial_elapsed >= interval_sec_ * 0.01) {
+            double bps = (partial_elapsed > 0.0)
+                ? (static_cast<double>(interval_bytes_) * 8.0) / partial_elapsed
+                : 0.0;
+            std::cout << format_row(interval_start_sec_, elapsed_,
+                                    interval_bytes_, bps) << std::endl;
+        }
     }
 
-    // Separator + aggregate summary
     std::cout << "- - - - - - - - - - - - - - - - - - -" << std::endl;
     std::cout << format_row(0.0, elapsed_, total_bytes_, get_bits_per_second()) << std::endl;
 }

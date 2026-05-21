@@ -2,24 +2,26 @@
 
 #include <iostream>
 #include <vector>
-#include <cstring>  // memset
+
+#include "../common/signal.h"
+#include "../metrics/timer.h"
 
 TcpClient::TcpClient(const Config& config) : config_(config) {}
 
 void TcpClient::run() {
-    // 1. Create and connect
-    if (!socket_.create()) return;
-
     std::cout << "Connecting to " << config_.host << " port " << config_.port << std::endl;
 
-    if (!socket_.connect(config_.host, config_.port)) return;
+    if (!socket_.resolve_and_connect(config_.host, config_.port)) return;
 
     std::cout << "Connected." << std::endl;
 
-    // 2. Prepare send buffer (fill once with zeros)
+    if (config_.io_timeout_sec > 0.0) {
+        socket_.set_send_timeout(config_.io_timeout_sec);
+    }
+
+    // Send buffer is zero-filled. Content doesn't matter for a throughput test.
     std::vector<char> buffer(config_.buffer_size, 0);
 
-    // 3. Blast data for the configured duration
     Timer duration_timer;
     duration_timer.start(config_.duration);
     throughput_.set_interval(config_.interval);
@@ -27,26 +29,24 @@ void TcpClient::run() {
 
     Throughput::print_header();
 
-    while (!duration_timer.is_expired()) {
+    while (!duration_timer.is_expired() && !shutdown_requested()) {
         ssize_t bytes_written = socket_.write(buffer.data(), buffer.size());
         if (bytes_written <= 0) {
             std::cerr << "Connection lost during test." << std::endl;
             break;
         }
-        throughput_.add_bytes(bytes_written);
+        throughput_.add_bytes(static_cast<uint64_t>(bytes_written));
 
         std::string line;
-        if (throughput_.check_interval(line)) {
+        while (throughput_.check_interval(line)) {
             std::cout << line << std::endl;
         }
     }
 
-    // 4. Close connection (signals server that test is done)
-    // Half-close to signal EOF, then fully close
+    // Signal EOF to peer so the server can stop its read loop, then close.
     socket_.shutdown_write();
     socket_.close();
 
-    // 5. Report
     throughput_.stop();
     throughput_.report();
 }

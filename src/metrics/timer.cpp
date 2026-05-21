@@ -25,5 +25,7 @@ struct timespec Timer::now() {
 }
 
 double Timer::diff_seconds(const struct timespec& start, const struct timespec& end) {
-    return (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    double sec_delta = static_cast<double>(end.tv_sec - start.tv_sec);
+    double nsec_delta = static_cast<double>(end.tv_nsec - start.tv_nsec);
+    return sec_delta + nsec_delta / 1e9;
 }

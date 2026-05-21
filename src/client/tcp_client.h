@@ -4,7 +4,6 @@
 #include "../common/config.h"
 #include "../network/socket.h"
 #include "../metrics/throughput.h"
-#include "../metrics/timer.h"
 
 class TcpClient {
 public:

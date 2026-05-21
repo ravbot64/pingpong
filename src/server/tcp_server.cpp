@@ -3,71 +3,94 @@
 #include <iostream>
 #include <vector>
 
+#include "../common/signal.h"
+
 TcpServer::TcpServer(const Config& config) : config_(config) {}
 
+namespace {
+
+bool open_listen_socket(Socket& s, const Config& cfg) {
+    if (!s.create_and_bind(cfg.bind_addr, cfg.port)) return false;
+    if (!s.listen(1)) return false;
+    return true;
+}
+
+void print_listening_banner(const Config& cfg) {
+    std::cout << "-------------------------------------------" << std::endl;
+    std::cout << "Server listening on "
+              << (cfg.bind_addr.empty() ? "*" : cfg.bind_addr)
+              << ":" << cfg.port << std::endl;
+    if (cfg.bind_addr.empty()) {
+        std::cout << "(All interfaces. Use -B <addr> to restrict.)" << std::endl;
+    }
+    std::cout << "-------------------------------------------" << std::endl;
+}
+
+} // namespace
+
 void TcpServer::run() {
-    // 1. Create, bind, listen
-    if (!listen_socket_.create()) return;
-    if (!listen_socket_.bind(config_.port)) return;
-    if (!listen_socket_.listen(1)) return;
+    if (!open_listen_socket(listen_socket_, config_)) return;
+    print_listening_banner(config_);
 
-    std::cout << "-------------------------------------------" << std::endl;
-    std::cout << "Server listening on port " << config_.port << std::endl;
-    std::cout << "-------------------------------------------" << std::endl;
-
-    // Accept loop — handle one client at a time, then wait for the next
-    while (true) {
-        // 2. Accept a client (blocks until one connects)
+    while (!shutdown_requested()) {
         std::string client_ip;
-        int client_port;
+        int client_port = 0;
         Socket client = listen_socket_.accept(client_ip, client_port);
-        if (!client.is_valid()) continue;
+        if (!client.is_valid()) {
+            if (shutdown_requested()) break;
+            continue;
+        }
 
-        // Stop accepting new connections while test is running.
-        // Any new client gets "Connection refused" instead of silently
-        // queuing in the kernel backlog (which causes corrupted results).
+        // Stop accepting new connections while a test is running so a second
+        // client doesn't silently queue and corrupt results.
         listen_socket_.close();
 
         std::cout << "Accepted connection from " << client_ip << ":" << client_port << std::endl;
 
-        // 3. Receive data as fast as possible
+        if (config_.io_timeout_sec > 0.0) {
+            client.set_recv_timeout(config_.io_timeout_sec);
+        }
+
         std::vector<char> buffer(config_.buffer_size);
         throughput_.set_interval(config_.interval);
         throughput_.start();
 
         Throughput::print_header();
 
-        while (true) {
+        while (!shutdown_requested()) {
             ssize_t bytes_read = client.read(buffer.data(), buffer.size());
             if (bytes_read < 0) {
                 std::cerr << "Error: recv failed during test." << std::endl;
                 break;
             }
             if (bytes_read == 0) {
-                // Peer closed connection
+                // Peer half-closed: end of test.
                 break;
             }
-            throughput_.add_bytes(static_cast<size_t>(bytes_read));
+
+            // Anchor t = 0 to first byte so idle time before the client starts
+            // sending doesn't get charged to the measurement window.
+            throughput_.mark_first_byte();
+            throughput_.add_bytes(static_cast<uint64_t>(bytes_read));
 
             std::string line;
-            if (throughput_.check_interval(line)) {
+            while (throughput_.check_interval(line)) {
                 std::cout << line << std::endl;
             }
         }
 
-        // 4. Stop and report
         throughput_.stop();
         throughput_.report();
         std::cout << std::endl;
         std::cout << "Client disconnected." << std::endl;
 
-        // 5. Re-open listen socket for next client
-        if (!listen_socket_.create()) return;
-        if (!listen_socket_.bind(config_.port)) return;
-        if (!listen_socket_.listen(1)) return;
+        if (shutdown_requested()) break;
 
-        std::cout << "-------------------------------------------" << std::endl;
-        std::cout << "Server listening on port " << config_.port << std::endl;
-        std::cout << "-------------------------------------------" << std::endl;
+        if (!open_listen_socket(listen_socket_, config_)) return;
+        print_listening_banner(config_);
+    }
+
+    if (shutdown_requested()) {
+        std::cout << "Shutting down." << std::endl;
     }
 }

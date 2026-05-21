@@ -5,7 +5,9 @@
 std::string format_bandwidth(double bits_per_second) {
     char buf[64];
 
-    if (bits_per_second >= 1e9) {
+    if (bits_per_second >= 1e12) {
+        std::snprintf(buf, sizeof(buf), "%7.2f Tbits/sec", bits_per_second / 1e12);
+    } else if (bits_per_second >= 1e9) {
         std::snprintf(buf, sizeof(buf), "%7.2f Gbits/sec", bits_per_second / 1e9);
     } else if (bits_per_second >= 1e6) {
         std::snprintf(buf, sizeof(buf), "%7.2f Mbits/sec", bits_per_second / 1e6);
@@ -21,7 +23,9 @@ std::string format_bandwidth(double bits_per_second) {
 std::string format_bytes(uint64_t bytes) {
     char buf[64];
 
-    if (bytes >= (1ULL << 30)) {
+    if (bytes >= (1ULL << 40)) {
+        std::snprintf(buf, sizeof(buf), "%7.2f TBytes", static_cast<double>(bytes) / (1ULL << 40));
+    } else if (bytes >= (1ULL << 30)) {
         std::snprintf(buf, sizeof(buf), "%7.2f GBytes", static_cast<double>(bytes) / (1ULL << 30));
     } else if (bytes >= (1ULL << 20)) {
         std::snprintf(buf, sizeof(buf), "%7.2f MBytes", static_cast<double>(bytes) / (1ULL << 20));

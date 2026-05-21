@@ -7,8 +7,9 @@ A TCP bandwidth measurement tool. Measures network throughput between two machin
 - Runs in **server** or **client** mode
 - **Client** connects to the server and blasts data for a configurable duration
 - **Server** listens for connections, receives data, and measures throughput
-- Both sides report **live per-interval** throughput + a final aggregate summary
+- Both sides report **fixed-grid per-interval** throughput + a final aggregate summary
 - Server stays up between tests, handling one client at a time
+- Resolves hostnames and supports both **IPv4 and IPv6**
 
 ## Build
 
@@ -16,9 +17,9 @@ A TCP bandwidth measurement tool. Measures network throughput between two machin
 make
 ```
 
-This produces a `pingpong` binary in the project root.
+This produces a `pingpong` binary in the project root. Builds are incremental — only changed sources recompile.
 
-To clean up:
+To clean:
 
 ```bash
 make clean
@@ -35,8 +36,10 @@ make clean
 ### Run a client test
 
 ```bash
-./pingpong -c <server-ip>
+./pingpong -c <host>
 ```
+
+`<host>` may be a hostname (`server.local`), IPv4 literal (`192.168.1.5`), or IPv6 literal (`::1`).
 
 ### Options
 
@@ -44,70 +47,48 @@ make clean
 |------|-------------|---------|
 | `-s` | Run as server | — |
 | `-c <host>` | Run as client, connect to host | — |
-| `-p <port>` | Port to listen on / connect to | 5201 |
-| `-t <seconds>` | Test duration (client only) | 10 |
-| `-i <seconds>` | Reporting interval | 1 |
-| `-l <bytes>` | Read/write buffer size | 131072 (128 KB) |
+| `-B <bind_addr>` | Server bind address (use to restrict to one interface) | all interfaces |
+| `-p <port>` | Port to listen on / connect to (1..65535) | 5201 |
+| `-t <seconds>` | Test duration in seconds, client only (1..86400) | 10 |
+| `-i <seconds>` | Reporting interval in seconds (0.01..60) | 1 |
+| `-l <bytes>` | Read/write buffer size (1..16777216, i.e. 16 MiB) | 131072 (128 KiB) |
+| `-T <seconds>` | Per-socket I/O timeout, 0 disables | 120 |
+| `-h` | Show help | — |
+
+`Ctrl-C` (`SIGINT`) on either side triggers a clean shutdown and still prints the aggregate report.
 
 ### Examples
 
 ```bash
-# Server on default port
+# Server on default port, all interfaces
 ./pingpong -s
 
-# Server on custom port
-./pingpong -s -p 9000
+# Server on custom port, bound to localhost only
+./pingpong -s -B 127.0.0.1 -p 9000
 
-# Client: 10 second test to localhost
-./pingpong -c 127.0.0.1
+# Client: 10-second test to localhost (works with hostnames now)
+./pingpong -c localhost
 
-# Client: 30 second test with 2-second reporting intervals
+# Client: 30-second test with 2-second reporting intervals
 ./pingpong -c 192.168.1.5 -t 30 -i 2
 
-# Client: custom port and buffer size
-./pingpong -c 10.0.0.1 -p 9000 -l 65536
+# Client: IPv6
+./pingpong -c ::1
 ```
 
-## Sample Output
+## Measurement notes
 
-**Client:**
-```
-PingPong v0.1
-Connecting to 127.0.0.1 port 5201
-Connected.
-[ ID]  Interval         Transfer      Bandwidth
-[  0]   0.00-1.00  sec   14.93 GBytes   128.26 Gbits/sec
-[  0]   1.00-2.00  sec   15.41 GBytes   132.41 Gbits/sec
-[  0]   2.00-3.00  sec   15.47 GBytes   132.91 Gbits/sec
-[  0]   3.00-4.00  sec   15.45 GBytes   132.72 Gbits/sec
-[  0]   4.00-5.00  sec   15.41 GBytes   132.38 Gbits/sec
-- - - - - - - - - - - - - - - - - - -
-[  0]   0.00-5.00  sec   76.68 GBytes   131.73 Gbits/sec
-```
+- Bandwidth units use **SI** (`Mbits/sec`, `Gbits/sec` = ÷10⁶ / 10⁹).
+- Transfer units use **binary** (`MBytes` = MiB, `GBytes` = GiB = ÷2²⁰ / 2³⁰).
+- The **server's `t=0`** is anchored to the **first received byte**, not the moment it called `accept()`. This keeps connection-setup idle time out of the measurement, so the server's reported duration matches the client's.
+- Intervals are emitted on a **fixed grid** (`[0,1)`, `[1,2)`, …) so boundaries don't drift over long tests. Each bucket's bandwidth is computed against the *configured* interval width, so back-to-back rows are comparable.
+- The client reports bytes **accepted into the kernel send buffer**. The server side is the authoritative figure for actual on-wire throughput.
 
-**Server:**
-```
-PingPong v0.1
--------------------------------------------
-Server listening on port 5201
--------------------------------------------
-Accepted connection from 127.0.0.1:49351
-[ ID]  Interval         Transfer      Bandwidth
-[  0]   0.00-1.00  sec   14.93 GBytes   128.26 Gbits/sec
-[  0]   1.00-2.00  sec   15.41 GBytes   132.41 Gbits/sec
-[  0]   2.00-3.00  sec   15.47 GBytes   132.91 Gbits/sec
-[  0]   3.00-4.00  sec   15.45 GBytes   132.72 Gbits/sec
-[  0]   4.00-5.00  sec   15.41 GBytes   132.38 Gbits/sec
-- - - - - - - - - - - - - - - - - - -
-[  0]   0.00-5.00  sec   76.68 GBytes   131.73 Gbits/sec
+## Security note
 
-Client disconnected.
--------------------------------------------
-Server listening on port 5201
--------------------------------------------
-```
+The default bind address is `0.0.0.0` (all interfaces). There is **no authentication or encryption** — do not expose `pingpong` directly on an untrusted network. For host-local tests pass `-B 127.0.0.1`.
 
-## Project Structure
+## Project structure
 
 ```
 pingpong/
@@ -115,19 +96,20 @@ pingpong/
 ├── src/
 │   ├── main.cpp                 # Entry point, arg parsing dispatch
 │   ├── common/
-│   │   ├── config.h / .cpp      # CLI argument parsing & configuration
-│   │   └── units.h / .cpp       # Human-readable formatting (Mbits/sec, GBytes)
+│   │   ├── config.{h,cpp}       # CLI parsing & validation
+│   │   ├── signal.{h,cpp}       # SIGINT/SIGTERM shutdown flag
+│   │   └── units.{h,cpp}        # Human-readable formatting
 │   ├── metrics/
-│   │   ├── timer.h / .cpp       # CLOCK_MONOTONIC timing utility
-│   │   └── throughput.h / .cpp  # Byte accumulation, interval tracking & reporting
+│   │   ├── timer.{h,cpp}        # CLOCK_MONOTONIC timing
+│   │   └── throughput.{h,cpp}   # Byte counters, fixed-grid intervals, reporting
 │   ├── network/
-│   │   └── socket.h / .cpp      # POSIX socket wrapper (RAII, move semantics)
+│   │   └── socket.{h,cpp}       # POSIX socket wrapper (RAII, IPv4/IPv6, timeouts)
 │   ├── server/
-│   │   └── tcp_server.h / .cpp  # Server: listen, accept loop, receive, report
+│   │   └── tcp_server.{h,cpp}   # Server: listen, accept, receive, report
 │   └── client/
-│       └── tcp_client.h / .cpp  # Client: connect, send, report
+│       └── tcp_client.{h,cpp}   # Client: resolve, connect, send, report
 ```
 
 ## Requirements
-- g++ with C++17 support
 
+- g++ with C++17 support, POSIX (Linux/macOS)
